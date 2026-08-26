@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 from aiohttp import web
+HISTORY = []
 
 DIR = os.path.dirname(os.path.abspath(__file__))
 HISTORY_FILE = os.path.join(DIR, 'chat_history.jsonl')
@@ -11,27 +12,11 @@ CONNS = {}  # ws -> name
 
 
 def load_history():
-    msgs = []
-    if os.path.exists(HISTORY_FILE):
-        try:
-            with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        msgs.append(json.loads(line))
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-    return msgs
-
-
+    return [] 
 def append_msg(m):
-    with open(HISTORY_FILE, 'a', encoding='utf-8') as f:
-        f.write(json.dumps(m, ensure_ascii=False) + '\n')
-
+    HISTORY.append(m)
+    if len(HISTORY) > 1000:
+        HISTORY.pop(0)
 
 def now_stamp():
     from datetime import datetime
@@ -76,7 +61,7 @@ async def ws_handler(request):
                 CONNS[ws] = name
                 await ws.send_str(json.dumps({
                     'type': 'init',
-                    'history': load_history()
+                    'history': HISTORY
                 }, ensure_ascii=False))
                 ts, hm = now_stamp()
                 append_msg({'ts': ts, 'hm': hm, 'x': name + ' 加入了聊天室', 'k': 'sys'})
