@@ -107,7 +107,10 @@ def now_stamp():
 
 
 async def index_handler(request):
-    return web.FileResponse(os.path.join(DIR, 'index.html'))
+    return web.FileResponse(
+        os.path.join(DIR, 'index.html'),
+        headers={'Cache-Control': 'no-cache, no-store, must-revalidate'}
+    )
 
 
 async def broadcast(text, exclude=None):
@@ -252,7 +255,7 @@ async def main():
     app.router.add_get('/', index_handler)
     app.router.add_get('/ws', ws_handler)
 
-    print('Orca的本地聊天室 · 服务器已启动，监听端口 ' + str(PORT), flush=True)
+    print('Orca的聊天室 · 服务器已启动，监听端口 ' + str(PORT), flush=True)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', PORT)
