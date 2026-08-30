@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>Orca的聊天室</title>
+<title>Orca的本地聊天室</title>
 <style>
 * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
 html, body { height:100%; }
@@ -50,6 +50,11 @@ header {
   border-bottom:1px solid #eef2f6;
   text-align:center;
   font-size:13px; color:#4a90e2; letter-spacing:4px;
+  position:relative;
+}
+#balance {
+  position:absolute; right:12px; top:50%; transform:translateY(-50%);
+  font-size:11px; color:#b0b8c4; white-space:nowrap;
 }
 #msgs {
   flex:1; overflow-y:auto;
@@ -125,6 +130,15 @@ header {
   cursor:pointer;
 }
 #emoBtn:active { background:#eef5fc; }
+#sendBtn {
+  flex:0 0 auto;
+  width:38px; height:38px;
+  border:none; border-radius:4px;
+  background:transparent;
+  display:flex; align-items:center; justify-content:center;
+  cursor:pointer;
+}
+#sendBtn:active { background:#eef5fc; }
 #txt {
   flex:1; min-width:0;
   border:1px solid #dde6ef; border-radius:4px;
@@ -145,13 +159,16 @@ header {
 <body>
 
 <div id="login">
-  <h1>Orca的聊天室</h1>
+  <h1>Orca的本地聊天室</h1>
   <input id="nameInput" maxlength="20" placeholder="你的名字">
   <button id="loginBtn">进 入</button>
 </div>
 
 <div id="app">
-  <header>Orca的聊天室</header>
+  <header>
+    Orca的本地聊天室
+    <span id="balance"></span>
+  </header>
   <div id="msgs"></div>
   <div id="emoWrap">
     <div id="emo"></div>
@@ -163,6 +180,11 @@ header {
         <line x1="9" y1="10" x2="9" y2="10.01" stroke-width="2.2"/>
         <line x1="15" y1="10" x2="15" y2="10.01" stroke-width="2.2"/>
         <path d="M8.5 14.5c1 1.2 2.2 1.8 3.5 1.8s2.5-.6 3.5-1.8"/>
+      </svg>
+    </button>
+    <button id="sendBtn" title="转账">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#6b93bf" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 2v20M17 7l-5-5-5 5M7 17l5 5 5-5"/>
       </svg>
     </button>
     <input id="txt" maxlength="500" autocomplete="off">
@@ -179,6 +201,31 @@ let joined = false;
 let myName = '';
 let lastHm = '';
 let stick = true;
+let sid = localStorage.getItem('lc_sid') || (Date.now().toString(36) + Math.random().toString(36).slice(2));
+localStorage.setItem('lc_sid', sid);
+let reconnectTimer = null;
+const seen = new Set();
+let myBalance = 0;
+
+function seenMsg(id) {
+  if (!id || seen.has(id)) return true;
+  seen.add(id);
+  if (seen.size > 2000) seen.clear();
+  return false;
+}
+
+function fmtBalance(c_kb) {
+  const kb = c_kb / 100;
+  if (kb >= 1024 * 1024 * 1024) return (kb / (1024 * 1024 * 1024)).toFixed(2) + ' TB';
+  if (kb >= 1024 * 1024) return (kb / (1024 * 1024)).toFixed(2) + ' GB';
+  if (kb >= 1024) return (kb / 1024).toFixed(2) + ' MB';
+  return kb.toFixed(2) + ' KB';
+}
+
+function updateBalance(bal) {
+  myBalance = bal;
+  $('balance').textContent = fmtBalance(bal);
+}
 
 const nameInput = $('nameInput');
 nameInput.value = localStorage.getItem('lc_name') || '';
@@ -195,7 +242,7 @@ function tryJoin() {
 function openSocket(name) {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(protocol + '//' + location.host + '/ws');
-  ws.onopen = () => ws.send(JSON.stringify({ type: 'join', name: name }));
+  ws.onopen = () => ws.send(JSON.stringify({ type: 'join', name: name, sid: sid }));
   ws.onmessage = e => {
     let d;
     try { d = JSON.parse(e.data); } catch (err) { return; }
@@ -207,19 +254,26 @@ function openSocket(name) {
       box.innerHTML = '';
       lastHm = '';
       d.history.forEach(m => {
+        if (seenMsg(m.id)) return;
         if (m.k === 'sys') addSys(m.x, m.hm, false);
         else if (m.k === 'pat') addPat(m.from, m.to, m.hm, false);
         else addMsg(m, false);
       });
       box.scrollTop = box.scrollHeight;
       $('txt').focus();
+      if (d.balance !== undefined) updateBalance(d.balance);
+    } else if (d.type === 'balance') {
+      if (d.balance !== undefined) updateBalance(d.balance);
     } else if (d.type === 'new') {
+      if (seenMsg(d.msg.id)) return;
       addMsg(d.msg, true);
       scrollBottom(false);
     } else if (d.type === 'sys') {
+      if (seenMsg(d.id)) return;
       addSys(d.x, d.hm, true);
       scrollBottom(false);
     } else if (d.type === 'pat') {
+      if (seenMsg(d.id)) return;
       addPat(d.from, d.to, d.hm, true);
       scrollBottom(false);
     }
@@ -227,7 +281,11 @@ function openSocket(name) {
   ws.onclose = () => {
     if (!joined) return;
     addSys('连接断开，重连中', true);
-    setTimeout(() => openSocket(myName || localStorage.getItem('lc_name') || '匿名'), 1500);
+    if (reconnectTimer) return;
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      openSocket(myName || localStorage.getItem('lc_name') || '匿名');
+    }, 1500);
   };
 }
 
@@ -320,6 +378,25 @@ $('emoBtn').onclick = () => {
   const open = $('emoWrap').classList.toggle('open');
   if (open) $('emo').scrollLeft = 0;
 };
+
+// ---- 转账按钮 ----
+let giving = false;
+$('sendBtn').onclick = () => {
+  giving = !giving;
+  const txt = $('txt');
+  if (giving) {
+    txt.placeholder = '指令格式 /give [名字] [数量] [单位] (指令不带方括号)';
+    txt.focus();
+  } else {
+    txt.placeholder = '';
+  }
+};
+$('txt').addEventListener('input', () => {
+  if (giving) {
+    giving = false;
+    $('txt').placeholder = '';
+  }
+});
 
 EMOS.forEach(s => {
   const b = document.createElement('button');
